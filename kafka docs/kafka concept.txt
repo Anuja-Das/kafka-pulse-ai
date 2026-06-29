@@ -1,0 +1,67 @@
+Producer — the sender. Pushes messages into a topic. Example: your order service publishes a new order event.
+
+  Topic — the mailbox. A named log where messages are stored. Example: orders topic holds all order events.
+
+  Partition — a topic is split into partitions for parallelism. Think of it as lanes on a highway. orders topic with 1 partition = 1 lane. Messages
+  in each partition are ordered.
+
+  Consumer — the receiver. Reads messages from a topic partition. Example: your order-processor service reading from orders.
+
+  Consumer Group — a team of consumers working together to process a topic. Kafka assigns each partition to exactly one consumer in the group at a
+  time.
+
+  ---
+  Hierarchy:
+
+  Producer
+      └── pushes to ──► Topic
+                            └── Partition 0
+                            └── Partition 1
+                                 └── consumed by ──► Consumer Group
+                                                         └── Consumer A  (owns Partition 0)
+                                                         └── Consumer B  (owns Partition 1)
+
+  ---
+  Why Consumer Groups matter:
+
+  - If you have 1 partition and 2 consumers in the same group → only 1 consumer reads, the other idles (Kafka won't split a partition)
+  - If you have 2 partitions and 2 consumers → each consumer owns 1 partition, true parallelism
+  - Two different groups reading the same topic each get their own independent copy of all messages — so order-processor and audit-service can both
+  consume orders without stepping on each other
+
+  ---
+  In your project: topic orders has 1 partition (partition 0), consumer group order-processor has 1 consumer reading it. When you stopped the
+  consumer, the lag went to 2 — those 2 messages are sitting in partition 0 waiting.
+
+In Kafka, every consumer must belong to a consumer group.
+ Why Kafka enforces this:
+
+  Consumer groups are how Kafka tracks offsets (how far each consumer has read). Without a group ID, Kafka has no way to remember "this consumer
+  left off at message 8" — so if it crashes and restarts, it wouldn't know where to resume.
+
+Lag exists at multiple levels:
+
+  Partition level (most granular) — each partition has its own lag. In your case: partition 0 has lag 2.
+
+  Consumer level — a consumer owns one or more partitions, so its lag is the sum of lag across those partitions.
+
+  Group level — total lag across all partitions across all consumers in the group.
+
+  ---
+  In your project right now they all show the same number because you have 1 partition + 1 consumer + 1 group:
+
+  Partition 0 lag = 2
+  Consumer A lag  = 2   (owns only partition 0)
+  Group lag       = 2   (only one consumer)
+
+  With 2 partitions and 2 consumers it would look like:
+
+  Partition 0 lag = 2  ──► Consumer A lag = 2
+  Partition 1 lag = 5  ──► Consumer B lag = 5
+                           ─────────────────
+                           Group lag       = 7
+
+  ---
+  So when you see "total_lag": 2 in your tool result — that's the group-level lag (sum of all partition lags). The "partitions" array breaks it down
+  to the partition level. Consumer-level lag is effectively the same as partition lag when each consumer owns exactly 1 partition, which is the
+  common case.

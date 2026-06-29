@@ -1,0 +1,42 @@
+Step 1: Create kafka cluster
+Run in cmd from kafka folder:
+bin\windows\kafka-storage.bat random-uuid
+
+clusterid:
+ATx2p16QQ2Oz4Ucy6l3P-g
+
+Step 2: Format kafka storage
+cmd:
+bin\windows\kafka-storage.bat format --standalone -t ATx2p16QQ2Oz4Ucy6l3P-g -c config\server.properties
+output:
+Formatting dynamic metadata voter directory /tmp/kraft-combined-logs with metadata.version 4.1-IV1
+Kafka storage has been formatted successfully.
+
+Step 3: Start Kafka
+cmd:
+bin\windows\kafka-server-start.bat config\server.properties
+
+Step 4: Create topic orders
+Run in a new cmd:
+bin\windows\kafka-topics.bat --create --topic orders --bootstrap-server localhost:9092
+
+Step 5: List topics
+cmd:
+bin\windows\kafka-topics.bat --list --bootstrap-server localhost:9092
+
+Step 6: Start Consumer
+Run in a new cmd:
+bin\windows\kafka-console-consumer.bat --bootstrap-server localhost:9092 --topic orders --group order-processor
+
+Step 7: Start Producer
+Run in a new cmd:
+bin\windows\kafka-console-producer.bat --topic orders --bootstrap-server localhost:9092
+
+Step 8: Publish message
+producer cmd:
+{"orderId":"1001","status":"CREATED"}
+immediately in consumer cmd, this should appear:
+{"orderId":"1001","status":"CREATED"}
+
+Stp 9: Stop consumer and check consumer group lag
+bin\windows\kafka-consumer-groups.bat --bootstrap-server localhost:9092 --describe --group order-processor
