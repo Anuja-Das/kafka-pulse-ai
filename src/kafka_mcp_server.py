@@ -12,6 +12,9 @@ import config
 app = Server("kafka-pulse")
 
 
+# A fresh KafkaAdminClient is created per tool call and closed in the finally block below.
+# KafkaAdminClient is not thread-safe and holds a persistent TCP connection; short-lived
+# instances avoid connection-leak issues across async tool calls.
 def _admin() -> KafkaAdminClient:
     return KafkaAdminClient(bootstrap_servers=config.KAFKA_BROKER)
 
@@ -29,6 +32,8 @@ def _member_to_partition_map(members: list) -> dict:
         if not assignment:
             continue
         try:
+            # kafka-python may return the assignment as a ConsumerProtocolAssignment object
+            # or as an already-decoded dict depending on the broker version and library version.
             if hasattr(assignment, "partitions"):
                 # ConsumerProtocolAssignment object (not yet dict-ified)
                 tps = assignment.partitions()
@@ -48,6 +53,10 @@ def _member_to_partition_map(members: list) -> dict:
     return tp_map
 
 
+# ── Tool registration ──────────────────────────────────────────────────────────
+# @app.list_tools() registers the tool manifest with the MCP server.
+# The MCP client (agent.py) calls list_tools() once during session.initialize()
+# to discover what tools are available before making any tool calls.
 @app.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     return [
@@ -81,12 +90,20 @@ async def handle_list_tools() -> list[types.Tool]:
     ]
 
 
+# ── Tool definitions ───────────────────────────────────────────────────────────
+# @app.call_tool() handles tool execution dispatched by the MCP client.
+# Every time agent.py (or the AI) calls a tool by name, this handler is invoked
+# with `name` = tool name and `arguments` = the parsed argument dict.
+# All three tools share a single KafkaAdminClient instance per request (created
+# at the top of this function and closed in the finally block).
 @app.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     admin = _admin()
     try:
         if name == "list_consumer_groups":
             groups = admin.list_groups()
+            # Groups whose IDs start with "_" are internal Kafka system groups (e.g. __consumer_offsets);
+            # exclude them so the agent only sees application-level consumer groups.
             group_ids = [
                 g["group_id"] for g in groups
                 if not g["group_id"].startswith("_")
@@ -96,10 +113,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         elif name == "get_consumer_group_lag":
             group = arguments["consumer_group"]
 
+            # committed offsets tell us where the consumer group last checkpointed.
             committed = admin.list_group_offsets(group).get(group, {})
 
             end_offsets = {}
             if committed:
+                # Fetch log-end offsets only for partitions the group is actually consuming;
+                # avoids unnecessary metadata fetches for unrelated topics.
                 end_offsets = {
                     tp: ots.offset
                     for tp, ots in admin.list_partition_offsets(
@@ -113,8 +133,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
             partitions = []
             for tp, om in committed.items():
+                # offset == -1 means no committed offset yet; treat as 0 to avoid negative lag.
                 committed_offset = om.offset if om.offset >= 0 else 0
                 end = end_offsets.get(tp, committed_offset)
+                # Clamp to 0: end < committed can happen briefly during partition rebalance.
                 lag = max(0, end - committed_offset)
                 member = tp_member.get(tp, {})
                 partitions.append({

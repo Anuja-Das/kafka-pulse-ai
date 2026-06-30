@@ -58,14 +58,17 @@ python src/main.py
 
 In Phase 3 the lag data collected in Phase 2 is injected into the AI's user message directly. The AI only has `get_consumer_status` available as a callable tool; it does not re-fetch lag. The diagnosis is printed as plain text followed by a per-partition table rendered from the already-collected `lag_data`.
 
-## Config loading — two paths
+## Config loading
 
-`src/config.py` is what `agent.py` uses: it loads `.env` via `python-dotenv` and exposes flat constants (`API_KEY`, `AZURE_ENDPOINT`, etc.).
+`src/util/config_loader.py` loads `resources/application.yml` and resolves `${ENV_VAR}` placeholders from `.env`. `src/config.py` imports from it and exposes flat constants (`API_KEY`, `AZURE_ENDPOINT`, etc.) consumed by `agent.py` and `kafka_mcp_server.py`.
 
-`src/util/config_loader.py` + `src/util/llm_adapter.py` provide an alternative config path that reads `resources/application.yml` with `${ENV_VAR}` substitution. These are **not wired into `agent.py`** and exist as supporting infrastructure.
+```
+.env  →  config_loader.py (YAML + ${} substitution)  →  config.py  →  agent / server
+```
 
-## Files that are currently unused by the main flow
+## Prompts
 
-- `src/prompts.py` — prompt builder functions (agent builds prompts inline instead)
-- `src/helpers.py` — `print_diagnosis()` helper (agent prints diagnosis inline instead)
-- `src/util/llm_adapter.py` — Azure OpenAI wrapper (agent creates `AzureOpenAI` directly)
+All AI prompts live in `src/prompts.py`:
+
+- `investigation_system_prompt()` — instructs the AI to act as a Kafka SRE and specifies the exact diagnosis output format
+- `investigation_user_prompt(group, total_lag, lag_data)` — per-group user message that injects the already-collected lag data

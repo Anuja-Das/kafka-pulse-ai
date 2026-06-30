@@ -1,49 +1,23 @@
-# Round 1: Ask the LLM which tool calls are needed.
-# topic_name and consumer_group are injected so the LLM never guesses names.
-def build_tool_call_system(topic_name: str, consumer_group: str) -> str:
-    return f"""You are a Kafka SRE agent. You MUST respond with valid JSON only — no prose.
-
-You have access to two tools:
-  - get_topic_lag       checks how many messages in a topic are unconsumed
-  - get_consumer_status checks whether a consumer group is actively running
-
-IMPORTANT — use these exact values verbatim. Do NOT alter, abbreviate, or paraphrase them:
-  topic_name:      "{topic_name}"
-  consumer_group:  "{consumer_group}"
-
-Return the tool calls required to investigate this topic and consumer group.
-Use this exact JSON structure:
-{{
-  "tool_calls": [
-    {{"name": "get_topic_lag",       "args": {{"topic_name": "{topic_name}", "consumer_group": "{consumer_group}"}}}},
-    {{"name": "get_consumer_status", "args": {{"consumer_group": "{consumer_group}"}}}}
-  ]
-}}
-"""
+import json
 
 
-# Round 2: Ask the LLM to produce a diagnosis from the tool results.
-# topic_name and consumer_group are injected so the LLM never guesses names.
-def build_diagnosis_system(topic_name: str, consumer_group: str) -> str:
-    return f"""You are a Kafka SRE agent. You MUST respond with valid JSON only — no prose.
+def investigation_system_prompt() -> str:
+    """System prompt for Phase 3 AI investigation."""
+    return (
+        "You are a Kafka SRE engineer. Lag data has already been collected and is provided below. "
+        "Call get_consumer_status to check consumer liveness, then deliver a diagnosis in exactly "
+        "this format — no markdown, no bullet points, no extra sections:\n\n"
+        "Summary: <one sentence>\n"
+        "Evidence: lag=<n>, consumer_active=<true|false>, affected_partitions=[<partition numbers with lag>]\n"
+        "Root Cause: <1-2 sentences max>\n"
+        "Recommendation: <1-2 sentences max>"
+    )
 
-You are diagnosing:
-  topic_name:      "{topic_name}"
-  consumer_group:  "{consumer_group}"
 
-Do NOT use any other topic or group name in your response.
-
-Given the Kafka tool results, produce a structured diagnosis.
-Use this exact JSON structure:
-{{
-  "summary":        "<one sentence describing what is happening>",
-  "evidence":       {{"lag": <integer>, "consumer_active": <true|false>}},
-  "root_cause":     "<explanation of why this is happening>",
-  "recommendation": "<concrete action to resolve the issue>"
-}}
-
-Apply these rules:
-  - lag = 0                              → system healthy, no action needed
-  - lag > 0 AND consumer_active = false  → messages stuck, consumer is not running; recommend starting it
-  - lag > 0 AND consumer_active = true   → consumer running but too slow; recommend investigating consumer logs
-"""
+def investigation_user_prompt(group: str, total_lag: int, lag_data: dict) -> str:
+    """User message for Phase 3 AI investigation; injects already-collected lag data."""
+    return (
+        f"Consumer group '{group}' has a total lag of {total_lag}.\n\n"
+        f"Lag breakdown (already collected):\n{json.dumps(lag_data, indent=2)}\n\n"
+        "Now call get_consumer_status to check if consumers are active, then provide your diagnosis."
+    )

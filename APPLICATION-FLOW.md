@@ -43,10 +43,9 @@ Automatically discovers every Kafka consumer group on the broker, checks which o
 | File | Role |
 |---|---|
 | `src/main.py` | Entry point — calls `run_investigation()` |
-| `src/config.py` | Kafka broker address and Azure OpenAI credentials |
-| `src/util/config_loader.py` | Loads `resources/application.yml` + `.env` into config |
-| `src/util/llm_adapter.py` | Thin wrapper around the Azure OpenAI client |
-| `src/prompts.py` | System prompt builders |
+| `src/config.py` | Flat constants for Kafka broker address and Azure OpenAI credentials |
+| `src/util/config_loader.py` | Loads `resources/application.yml` + `.env` and resolves `${ENV_VAR}` placeholders |
+| `src/prompts.py` | `investigation_system_prompt()` and `investigation_user_prompt()` used in Phase 3 |
 | `resources/application.yml` | YAML config with `${ENV_VAR}` placeholders |
 
 ---

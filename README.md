@@ -44,16 +44,15 @@ kafka-pulse-ai/
 │   ├── main.py              ← entry point
 │   ├── agent.py             ← MCP client + Azure OpenAI orchestrator
 │   ├── kafka_mcp_server.py  ← MCP server exposing 3 Kafka tools
-│   ├── config.py            ← broker address + Azure OpenAI credentials
-│   ├── prompts.py           ← system prompt builders
+│   ├── config.py            ← flat constants for broker address + Azure OpenAI credentials
+│   ├── prompts.py           ← AI prompt functions used in Phase 3 investigation
 │   └── util/
-│       ├── config_loader.py ← loads application.yml + .env
-│       └── llm_adapter.py   ← Azure OpenAI client wrapper
+│       └── config_loader.py ← loads application.yml + .env, resolves ${ENV_VAR} placeholders
 ├── resources/
 │   └── application.yml      ← YAML config with ${ENV_VAR} placeholders
 ├── .env                     ← secrets (never commit this)
 ├── requirements.txt
-├── flow.md                  ← detailed architecture and flow walkthrough
+├── APPLICATION-FLOW.md      ← detailed architecture and flow walkthrough
 └── README.md
 ```
 

@@ -9,8 +9,12 @@ from openai import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 import config
+from prompts import investigation_system_prompt, investigation_user_prompt
 
 # Only get_consumer_status is exposed to the AI — lag data is passed in directly from Phase 2.
+# Deliberately withholding get_consumer_group_lag prevents the AI from re-fetching data we already
+# have, which would waste a round-trip and risk the AI seeing a different snapshot than what was
+# used for the healthy/unhealthy decision in Phase 2.
 _INVESTIGATION_TOOLS = [
     {
         "type": "function",
@@ -30,6 +34,7 @@ _INVESTIGATION_TOOLS = [
 
 
 async def _call(session: ClientSession, tool: str, args: dict) -> dict:
+    # MCP always returns content as a list of TextContent blobs; index 0 holds the JSON payload.
     result = await session.call_tool(tool, args)
     return json.loads(result.content[0].text)
 
@@ -45,30 +50,14 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
     total_lag = lag_data.get("total_lag", 0)
 
     messages: list[ChatCompletionMessageParam] = [
-        {
-            "role": "system",
-            "content": (
-                "You are a Kafka SRE engineer. Lag data has already been collected and is provided below. "
-                "Call get_consumer_status to check consumer liveness, then deliver a diagnosis in exactly "
-                "this format — no markdown, no bullet points, no extra sections:\n\n"
-                "Summary: <one sentence>\n"
-                "Evidence: lag=<n>, consumer_active=<true|false>, affected_partitions=[<partition numbers with lag>]\n"
-                "Root Cause: <1-2 sentences max>\n"
-                "Recommendation: <1-2 sentences max>"
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Consumer group '{group}' has a total lag of {total_lag}.\n\n"
-                f"Lag breakdown (already collected):\n{json.dumps(lag_data, indent=2)}\n\n"
-                "Now call get_consumer_status to check if consumers are active, then provide your diagnosis."
-            ),
-        },
+        {"role": "system", "content": investigation_system_prompt()},
+        {"role": "user",   "content": investigation_user_prompt(group, total_lag, lag_data)},
     ]
 
     print(f"\n[ai] Investigating '{group}' (lag={total_lag}) ...")
 
+    # Agentic tool-calling loop: keep sending messages until the model stops requesting tools
+    # and produces a final text response (finish_reason != "tool_calls").
     while True:
         response = ai.chat.completions.create(
             model=config.AZURE_DEPLOYMENT,
@@ -77,6 +66,7 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
             tool_choice="auto",
         )
         choice = response.choices[0]
+        # Append the assistant turn so the model has full conversation history next iteration.
         messages.append(choice.message)
 
         if choice.finish_reason == "tool_calls":
@@ -86,17 +76,22 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
                 print(f"[tool call]   {fn}({json.dumps(fn_args)})")
                 tool_result = await _call(session, fn, fn_args)
                 print(f"[tool result]\n{json.dumps(tool_result, indent=2)}")
+                # tool_call_id must match the id the model issued; the model uses it to
+                # correlate tool responses with the tool_calls it requested.
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(tool_result),
                 })
         else:
+            # Model has finished tool calls and produced its final diagnosis text.
             print("\n" + "=" * 60)
             print(f"  DIAGNOSIS: {group}")
             print("=" * 60)
             print(choice.message.content)
 
+            # Partition table is rendered from the lag_data we already have from Phase 2,
+            # not re-fetched — keeps the display consistent with the lag that triggered investigation.
             partitions = lag_data.get("partitions", [])
             if partitions:
                 print()
@@ -117,6 +112,8 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
 
 
 async def run_investigation():
+    # Launch kafka_mcp_server.py as a child process; MCP communicates over its stdin/stdout.
+    # Using sys.executable ensures the child runs in the same venv as this process.
     server_params = StdioServerParameters(
         command=sys.executable,
         args=[str(Path(__file__).parent / "kafka_mcp_server.py")],
