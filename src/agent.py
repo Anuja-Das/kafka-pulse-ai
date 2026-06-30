@@ -6,6 +6,7 @@ from pathlib import Path
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from openai import AzureOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 import config
 
@@ -43,7 +44,7 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
 
     total_lag = lag_data.get("total_lag", 0)
 
-    messages = [
+    messages: list[ChatCompletionMessageParam] = [
         {
             "role": "system",
             "content": (
@@ -51,7 +52,7 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
                 "Call get_consumer_status to check consumer liveness, then deliver a diagnosis in exactly "
                 "this format — no markdown, no bullet points, no extra sections:\n\n"
                 "Summary: <one sentence>\n"
-                "Evidence: lag=<n>, consumer_active=<true|false>\n"
+                "Evidence: lag=<n>, consumer_active=<true|false>, affected_partitions=[<partition numbers with lag>]\n"
                 "Root Cause: <1-2 sentences max>\n"
                 "Recommendation: <1-2 sentences max>"
             ),
@@ -95,6 +96,22 @@ async def _investigate(session: ClientSession, group: str, lag_data: dict):
             print(f"  DIAGNOSIS: {group}")
             print("=" * 60)
             print(choice.message.content)
+
+            partitions = lag_data.get("partitions", [])
+            if partitions:
+                print()
+                print("Partition Status:")
+                hdr = f"  {'TOPIC':<30} {'PART':>4}  {'COMMITTED':>10}  {'LOG-END':>10}  {'LAG':>5}  CONSUMER"
+                print(hdr)
+                print("  " + "-" * (len(hdr) - 2))
+                for p in partitions:
+                    flag = " <-- LAG" if p["lag"] > 0 else ""
+                    print(
+                        f"  {p['topic']:<30} {p['partition']:>4}  "
+                        f"{p['current_offset']:>10}  {p['log_end_offset']:>10}  "
+                        f"{p['lag']:>5}  {p['consumer_id']}{flag}"
+                    )
+
             print("=" * 60)
             break
 

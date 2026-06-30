@@ -30,7 +30,7 @@ Automatically discovers every Kafka consumer group on the broker, checks which o
 
 > **Phase 1 (scan)** uses `list_consumer_groups` directly (not via AI).
 > **Phase 2 (lag check)** uses `get_consumer_group_lag` directly (not via AI).
-> **Phase 3 (AI investigation)** gives the AI access to `get_consumer_group_lag` and `get_consumer_status` only.
+> **Phase 3 (AI investigation)** gives the AI access to `get_consumer_status` only. Lag data collected in Phase 2 is injected into the AI's user message directly — the AI does not re-fetch it.
 
 ### Kafka Client
 
@@ -51,6 +51,24 @@ Automatically discovers every Kafka consumer group on the broker, checks which o
 
 ---
 
+## What is stdio
+
+**stdio** (standard input/output) is the simplest form of inter-process communication — one process writes to its stdout, another reads from its stdin.
+
+When `agent.py` starts `kafka_mcp_server.py` as a child process via `StdioServerParameters`, the OS wires up a pipe between them automatically. The MCP library handles the JSON framing over that pipe:
+
+```
+agent.py                              kafka_mcp_server.py
+(parent process)                      (child process)
+
+writes JSON tool call  ──stdout──►   reads from stdin
+reads JSON result      ◄──stdout──   writes to stdout
+```
+
+No network port, no HTTP server — just two processes talking through pipes. This is why the transport is called `stdio` in the MCP configuration.
+
+---
+
 ## Two-process architecture
 
 When you run the app, **two Python processes** start:
@@ -58,10 +76,10 @@ When you run the app, **two Python processes** start:
 ```
 ┌─────────────────────────────┐        MCP protocol (stdio)       ┌──────────────────────────────┐
 │  agent.py  (MCP client)     │  ──────────────────────────────►  │  kafka_mcp_server.py         │
-│                             │                                    │  (MCP server: kafka-pulse)   │
+│                             │                                   │  (MCP server: kafka-pulse)   │
 │  - Drives the investigation │  ◄──────────────────────────────  │  - Uses KafkaAdminClient     │
-│  - Calls Azure OpenAI       │        JSON tool results           │  - Returns structured JSON   │
-└─────────────────────────────┘                                    └──────────────────────────────┘
+│  - Calls Azure OpenAI       │        JSON tool results          │  - Returns structured JSON   │
+└─────────────────────────────┘                                   └──────────────────────────────┘
                                                                               │
                                                                    kafka-python (TCP)
                                                                               │
@@ -129,22 +147,28 @@ For each group with lag, the agent opens a tool-calling loop with Azure OpenAI:
 
 ```
 agent.py → Azure OpenAI
-    "Consumer group 'order-processor' has lag of 42. Use tools to investigate."
+    "Consumer group 'order-processor' has lag of 42.
+     Lag breakdown (already collected): { total_lag: 42, partitions: [...] }
+     Now call get_consumer_status to check if consumers are active."
 
-Azure OpenAI decides to call tools:
-    → get_consumer_group_lag("order-processor")   ← per-partition lag + consumer_id/host/client_id
-    → get_consumer_status("order-processor")      ← group state, active members
+Azure OpenAI calls the one tool available to it:
+    → get_consumer_status("order-processor")   ← group state, active members
 
-Each tool call is routed to kafka_mcp_server.py and returns formatted JSON.
+The tool call is routed to kafka_mcp_server.py and returns formatted JSON.
 
-Azure OpenAI sees the data and produces a plain-text diagnosis:
-    ┌──────────────────────────────────────────────────────┐
-    │  DIAGNOSIS: order-processor                          │
-    │  Summary: Consumer group has lag, no active members. │
-    │  Evidence: lag=42, consumer_active=false             │
-    │  Root Cause: No consumer is running for this group.  │
-    │  Recommendation: Restart the consumer process.       │
-    └──────────────────────────────────────────────────────┘
+Azure OpenAI produces a plain-text diagnosis followed by a partition table
+rendered from the already-collected lag data:
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  DIAGNOSIS: order-processor                                       │
+    │  Summary: Consumer group has lag, no active members.              │
+    │  Evidence: lag=42, consumer_active=false, affected_partitions=[0] │
+    │  Root Cause: No consumer is running for this group.               │
+    │  Recommendation: Restart the consumer process.                    │
+    │                                                                   │
+    │  Partition Status:                                                │
+    │    TOPIC     PART   COMMITTED   LOG-END   LAG  CONSUMER           │
+    │    orders       0          10        52    42  - <-- LAG          │
+    └───────────────────────────────────────────────────────────────────┘
 ```
 
 The AI loop continues until the model stops requesting tool calls and delivers a final diagnosis.
@@ -163,6 +187,16 @@ The AI loop continues until the model stops requesting tool calls and delivers a
 
 ## Config and credentials
 
-- **Kafka broker** address is set in `src/config.py` (`KAFKA_BROKER`)
-- **Azure OpenAI credentials** (`API_KEY`, `AZURE_ENDPOINT`, `API_VERSION`, `AZURE_DEPLOYMENT`) are loaded from `.env` via `src/util/config_loader.py`
-- The YAML file `resources/application.yml` holds config with `${ENV_VAR}` placeholders resolved at startup
+All configuration is centralised in `resources/application.yml`. At startup, `src/util/config_loader.py` loads the file and resolves `${ENV_VAR}` placeholders from `.env`. `src/config.py` then exposes the resolved values as module-level constants consumed by `agent.py` and `kafka_mcp_server.py`.
+
+```
+.env  →  config_loader.py (YAML + ${} substitution)  →  config.py  →  agent / server
+```
+
+| Key in `application.yml` | Source | Used for |
+|---|---|---|
+| `kafka_broker` | literal value | Kafka bootstrap server address |
+| `api_key` | `${API_KEY}` from `.env` | Azure OpenAI authentication |
+| `azure_endpoint` | `${AZURE_ENDPOINT}` from `.env` | Azure OpenAI resource URL |
+| `api_version` | `${API_VERSION}` from `.env` | Azure OpenAI API version |
+| `azure_deployment` | `${AZURE_DEPLOYMENT}` from `.env` | Model deployment name (e.g. `gpt-4o`) |

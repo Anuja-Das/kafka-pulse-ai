@@ -9,7 +9,7 @@ client = AzureOpenAI(
 
 def call_llm(messages):
     response = client.chat.completions.create(
-        model="gpt-5.1",
+        model=config.get("azure_deployment"),
         messages=messages,
         response_format={"type": "json_object"}
     )

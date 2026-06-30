@@ -83,10 +83,10 @@ AZURE_DEPLOYMENT=gpt-4o
 
 ## Step 3 — Configure Kafka Broker
 
-Open `src/config.py` and verify the broker address:
+Open `resources/application.yml` and verify the broker address:
 
-```python
-KAFKA_BROKER = "localhost:9092"  # change if your broker is elsewhere
+```yaml
+kafka_broker: localhost:9092   # change if your broker is elsewhere
 ```
 
 ---
@@ -150,24 +150,6 @@ The agent auto-discovers all consumer groups, checks lag, and investigates any g
 [ai] 1 group(s) require investigation.
 
 [ai] Investigating 'order-processor' (lag=42) ...
-[tool call]   get_consumer_group_lag({"consumer_group": "order-processor"})
-[tool result]
-{
-  "consumer_group": "order-processor",
-  "total_lag": 42,
-  "partitions": [
-    {
-      "topic": "orders",
-      "partition": 0,
-      "current_offset": 10,
-      "log_end_offset": 52,
-      "lag": 42,
-      "consumer_id": "-",
-      "host": "-",
-      "client_id": "-"
-    }
-  ]
-}
 [tool call]   get_consumer_status({"consumer_group": "order-processor"})
 [tool result]
 {
@@ -182,9 +164,14 @@ The agent auto-discovers all consumer groups, checks lag, and investigates any g
   DIAGNOSIS: order-processor
 ============================================================
 Summary: Consumer group 'order-processor' has lag of 42 with no active consumers.
-Evidence: lag=42, consumer_active=false
+Evidence: lag=42, consumer_active=false, affected_partitions=[0]
 Root Cause: No consumer processes are connected — the group state is Empty, meaning messages are accumulating unconsumed.
 Recommendation: Restart the consumer process for 'order-processor' and verify it reconnects to the broker.
+
+Partition Status:
+  TOPIC                          PART    COMMITTED     LOG-END    LAG  CONSUMER
+  -------------------------------------------------------------------------------
+  orders                            0           10          52     42  - <-- LAG
 ============================================================
 ```
 
@@ -212,7 +199,7 @@ The broker state changed between runs. The tool always reports the live state at
 
 **Azure OpenAI error**
 
-Check `.env` for correct `API_KEY`, `AZURE_ENDPOINT`, and `AZURE_DEPLOYMENT` values.
+Check `.env` for correct `API_KEY`, `AZURE_ENDPOINT`, `API_VERSION`, and `AZURE_DEPLOYMENT` values. These are substituted into `resources/application.yml` at startup — a missing variable will raise a `KeyError` in `config_loader.py`.
 
 **Group stays `Stable` after stopping consumer**
 

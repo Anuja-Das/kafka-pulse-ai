@@ -1,11 +1,7 @@
-import os
-from dotenv import load_dotenv
+from util.config_loader import config as _yml
 
-load_dotenv()
-
-KAFKA_BROKER = "localhost:9092"
-
-API_KEY = os.getenv("API_KEY")
-AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
-API_VERSION = os.getenv("API_VERSION", "2024-02-01")
-AZURE_DEPLOYMENT = os.getenv("AZURE_DEPLOYMENT", "gpt-4o")
+KAFKA_BROKER     = _yml["kafka_broker"]
+API_KEY          = _yml["api_key"]
+AZURE_ENDPOINT   = _yml["azure_endpoint"]
+API_VERSION      = _yml["api_version"]
+AZURE_DEPLOYMENT = _yml["azure_deployment"]
